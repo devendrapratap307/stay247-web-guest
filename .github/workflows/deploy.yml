@@ -1,0 +1,46 @@
+name: stayserve-web-guest
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      environment: { description: 'dev or prod', required: true, default: dev, type: choice, options: [dev, prod] }
+
+permissions:
+  id-token: write   # OIDC to AWS: no long-lived keys stored in GitHub
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build:dev
+
+  deploy:
+    needs: verify
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment || 'dev' }}   # prod environment should require manual approval
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm }
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: Deploy
+        env:
+          TARGET: ${{ github.event.inputs.environment || 'dev' }}
+          S3_BUCKET_DEV: ${{ vars.S3_BUCKET }}
+          S3_BUCKET_PROD: ${{ vars.S3_BUCKET }}
+          CLOUDFRONT_ID_DEV: ${{ vars.CLOUDFRONT_ID }}
+          CLOUDFRONT_ID_PROD: ${{ vars.CLOUDFRONT_ID }}
+        run: scripts/deploy.sh "$TARGET"
